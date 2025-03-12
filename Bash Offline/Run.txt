@@ -1,0 +1,4 @@
+#Inside parent directory , keep .sh file ,sample_input.txt ,plagiarism.txt  ,submission folder
+
+========================
+Run: bash 2005102.sh -i sample_input.txt 

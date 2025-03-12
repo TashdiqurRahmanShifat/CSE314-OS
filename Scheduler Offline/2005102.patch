@@ -1,0 +1,800 @@
+diff --git a/.dir-locals.el b/.dir-locals.el
+old mode 100644
+new mode 100755
+diff --git a/.editorconfig b/.editorconfig
+old mode 100644
+new mode 100755
+diff --git a/.gdbinit.tmpl-riscv b/.gdbinit.tmpl-riscv
+old mode 100644
+new mode 100755
+diff --git a/.gitignore b/.gitignore
+old mode 100644
+new mode 100755
+diff --git a/LICENSE b/LICENSE
+old mode 100644
+new mode 100755
+diff --git a/Makefile b/Makefile
+old mode 100644
+new mode 100755
+index 62fd0f8..f237306
+--- a/Makefile
++++ b/Makefile
+@@ -139,6 +139,8 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_dummyproc\
++	$U/_testprocinfo\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+@@ -160,7 +162,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+ 	then echo "-gdb tcp::$(GDBPORT)"; \
+ 	else echo "-s -p $(GDBPORT)"; fi)
+ ifndef CPUS
+-CPUS := 3
++CPUS := 1
+ endif
+ 
+ QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
+diff --git a/README b/README
+old mode 100644
+new mode 100755
+diff --git a/kernel/bio.c b/kernel/bio.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/buf.h b/kernel/buf.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/console.c b/kernel/console.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/defs.h b/kernel/defs.h
+old mode 100644
+new mode 100755
+index d1b6bb9..5ce0a7b
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -187,3 +187,6 @@ void            virtio_disk_intr(void);
+ 
+ // number of elements in fixed-size array
+ #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
++
++
++int random(void);
+diff --git a/kernel/elf.h b/kernel/elf.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/entry.S b/kernel/entry.S
+old mode 100644
+new mode 100755
+diff --git a/kernel/exec.c b/kernel/exec.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/fcntl.h b/kernel/fcntl.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/file.c b/kernel/file.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/file.h b/kernel/file.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/fs.c b/kernel/fs.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/fs.h b/kernel/fs.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/kalloc.c b/kernel/kalloc.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/kernel.ld b/kernel/kernel.ld
+old mode 100644
+new mode 100755
+diff --git a/kernel/kernelvec.S b/kernel/kernelvec.S
+old mode 100644
+new mode 100755
+diff --git a/kernel/log.c b/kernel/log.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/main.c b/kernel/main.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/memlayout.h b/kernel/memlayout.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/param.h b/kernel/param.h
+old mode 100644
+new mode 100755
+index 6624bff..d8aba78
+--- a/kernel/param.h
++++ b/kernel/param.h
+@@ -11,3 +11,11 @@
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+ #define FSSIZE       2000  // size of file system in blocks
+ #define MAXPATH      128   // maximum file path name
++#define TIME_LIMIT_0 2
++#define TIME_LIMIT_1 4
++#define WAIT_THRESH  6
++#define DEFAULT_TICKET 10
++
++
++typedef unsigned int uint;
++
+diff --git a/kernel/pipe.c b/kernel/pipe.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/plic.c b/kernel/plic.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/printf.c b/kernel/printf.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/proc.c b/kernel/proc.c
+old mode 100644
+new mode 100755
+index 58a8a0b..fd1be3f
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -6,6 +6,13 @@
+ #include "proc.h"
+ #include "defs.h"
+ 
++#define COLOR_RESET   "\033[0m"
++#define COLOR_GREEN   "\033[1;32m"
++#define COLOR_YELLOW  "\033[1;33m"
++#define COLOR_BLUE    "\033[1;34m"
++#define COLOR_RED     "\033[1;31m"
++#define COLOR_BROWN   "\033[0;33m"
++
+ struct cpu cpus[NCPU];
+ 
+ struct proc proc[NPROC];
+@@ -124,6 +131,9 @@ allocproc(void)
+ found:
+   p->pid = allocpid();
+   p->state = USED;
++  p->queue_level=0;
++  p->original_ticketCount=DEFAULT_TICKET;
++  p->current_ticketCount=DEFAULT_TICKET;
+ 
+   // Allocate a trapframe page.
+   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+@@ -322,6 +332,9 @@ fork(void)
+   np->state = RUNNABLE;
+   release(&np->lock);
+ 
++  np->original_ticketCount=p->original_ticketCount;
++  //np->current_ticketCount=p->current_ticketCount;
++  np->current_ticketCount=p->original_ticketCount;
+   return pid;
+ }
+ 
+@@ -434,6 +447,52 @@ wait(uint64 addr)
+   }
+ }
+ 
++
++
++static unsigned int xorshift_seed = 2463534242;// Seed value
++
++// Xorshift random number generator
++int random(void) {
++    xorshift_seed ^= xorshift_seed << 13;
++    xorshift_seed ^= xorshift_seed >> 17;
++    xorshift_seed ^= xorshift_seed << 5;
++    return xorshift_seed & 0x7FFFFFFF;  // Return non-negative integer
++}
++
++
++int global_flag=0;
++
++void update_waiting_time(struct proc *current_proc) 
++{
++    struct proc *p;
++    for(p = proc; p < &proc[NPROC]; p++) {
++        if(p == current_proc|| p->state != RUNNABLE) {
++            continue;
++        }
++        p->waiting_time++;
++
++
++        if(p->queue_level==0) {
++          p->queue_ticks[0]++;
++        }
++        else{
++          p->queue_ticks[1]++;
++        }
++        if(p->waiting_time>=WAIT_THRESH && p->queue_level==1)
++        {
++          p->queue_level=0;
++          if(global_flag==1)
++          {
++            printf(COLOR_GREEN "BOOST: Process %d (%s) waited for %d ticks, promoted to queue 0" COLOR_RESET "\n",p->pid, p->name, p->waiting_time);
++          }
++            //printf("BOOST: Process %d (%s) waited for %d ticks, promoted to queue 0\n", p->pid,p->name,p->waiting_time);
++          p->waiting_time=0;
++
++        }
++    }
++}
++
++
+ // Per-CPU process scheduler.
+ // Each CPU calls scheduler() after setting itself up.
+ // Scheduler never returns.  It loops, doing:
+@@ -441,10 +500,15 @@ wait(uint64 addr)
+ //  - swtch to start running that process.
+ //  - eventually that process transfers control
+ //    via swtch back to the scheduler.
++
++
++
++
+ void
+ scheduler(void)
+ {
+   struct proc *p;
++  struct proc *q;
+   struct cpu *c = mycpu();
+ 
+   c->proc = 0;
+@@ -453,26 +517,133 @@ scheduler(void)
+     // turned off; enable them to avoid a deadlock if all
+     // processes are waiting.
+     intr_on();
++    int total_tickets = 0;
++
++    // Calculate total tickets
++    for(p = proc; p < &proc[NPROC]; p++) {
++      if(p->state == RUNNABLE && p->queue_level==0) {
++        total_tickets += p->current_ticketCount;
++      }
++    }
++
++    if(total_tickets==0)
++    {
++      for(p= proc; p<&proc[NPROC];p++)
++      {
++        // if(p->state == RUNNABLE && p->queue_level==0)
++          p->current_ticketCount=p->original_ticketCount;
++      }
++    }
++
++    while(1)
++    {
++      int possible_candidate[NPROC];
++      int possible_candidate_index=0;
++      int possible_ticket_sum=0;
++      //int count=0;
++      for(int i=0;i<NPROC;i++)
++      { 
++        q=&proc[i];
++        // if(q->state==RUNNABLE)  
++        // printf("%s %d\n",q->name, q->state);
++        if(q->state==RUNNABLE && q->queue_level==0 && q->current_ticketCount>0)
++        {
++          possible_candidate[possible_candidate_index++]=i;
++          possible_ticket_sum+=q->current_ticketCount;
++          //count++;
++        }
++      }
++      if(possible_ticket_sum==0)break;
++      int winning_ticket_val=random()%possible_ticket_sum;
++      //printf("%d\n",winning_ticket_val);
++      int winner=-1;
++      int sum=0;
++      for (int count = 0; count < possible_candidate_index; count++) {
++          struct proc *candidate_proc = &proc[possible_candidate[count]];
++          sum += candidate_proc->current_ticketCount;
++          if (sum > winning_ticket_val) {
++              winner = possible_candidate[count];
++              if(global_flag==1)
++              {
++                printf(COLOR_BLUE "LOTTERY: Process %d (%s) won in queue 0 with tickets %d" COLOR_RESET "\n",candidate_proc->pid,candidate_proc->name,candidate_proc->current_ticketCount);
++              }
++              break;
++          }
++      }
++      struct proc *winproc=&proc[winner];
++
++      acquire(&winproc->lock);
++      winproc->times_scheduled++;
++      winproc->current_ticketCount--;
++      while(winproc->state==RUNNABLE && winproc->running_time<TIME_LIMIT_0)
++        {
++          // Switch to chosen process.  It is the process's job
++          // to release its lock and then reacquire it
++          // before jumping back to us.
++          winproc->state = RUNNING;
++          c->proc = winproc;
++          swtch(&c->context, &winproc->context);
++          
++          // Process is done running for now.
++          // It should have changed its p->state before coming back.
++          c->proc = 0;
++          winproc->running_time++;
++          
++          //release(&winproc->lock);
++          update_waiting_time(winproc);
++          //acquire(&winproc->lock);
++        }
++        if(winproc->running_time>=TIME_LIMIT_0)
++        {
++          if(global_flag==1)
++            printf(COLOR_RED "DEMO: Process %d (%s) ran for %d time ticks, demoted to queue 1" COLOR_RESET "\n",winproc->pid,winproc->name,winproc->running_time);
++          winproc->queue_level=1;
++        }
++        winproc->running_time=0;
++        winproc->waiting_time=0;
++        release(&winproc->lock);
++
++    }
+ 
+     for(p = proc; p < &proc[NPROC]; p++) {
+       acquire(&p->lock);
+-      if(p->state == RUNNABLE) {
+-        // Switch to chosen process.  It is the process's job
+-        // to release its lock and then reacquire it
+-        // before jumping back to us.
+-        p->state = RUNNING;
+-        c->proc = p;
+-        swtch(&c->context, &p->context);
+-
+-        // Process is done running for now.
+-        // It should have changed its p->state before coming back.
+-        c->proc = 0;
++      if(p->state == RUNNABLE && p->queue_level==1) {
++        p->times_scheduled++;
++        
++        while(p->state==RUNNABLE && p->running_time<TIME_LIMIT_1)
++        {
++          // Switch to chosen process.  It is the process's job
++          // to release its lock and then reacquire it
++          // before jumping back to us.
++          p->state = RUNNING;
++          c->proc = p;
++          swtch(&c->context, &p->context);
++
++          // Process is done running for now.
++          // It should have changed its p->state before coming back.
++          c->proc = 0;
++          p->running_time+=1;
++          //release(&p->lock);
++          update_waiting_time(p);
++          //acquire(&p->lock);
++
++        }
++        if(p->running_time<TIME_LIMIT_1)
++        {
++          if(global_flag==1)
++            printf(COLOR_YELLOW "PROMO: Process %d (%s) ran for %d time ticks, promoted to queue 0" COLOR_RESET "\n",p->pid,p->name,p->running_time);
++          p->queue_level=0;
++        }
++        p->running_time=0;
++        p->waiting_time=0;
+       }
+       release(&p->lock);
+     }
+   }
+ }
+ 
++
++
+ // Switch to scheduler.  Must hold only p->lock
+ // and have changed proc->state. Saves and restores
+ // intena because intena is a property of this
+diff --git a/kernel/proc.h b/kernel/proc.h
+old mode 100644
+new mode 100755
+index d021857..d42b5c1
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -91,6 +91,15 @@ struct proc {
+   int killed;                  // If non-zero, have been killed
+   int xstate;                  // Exit status to be returned to parent's wait
+   int pid;                     // Process ID
++  int queue_level;
++  int original_ticketCount;
++  int current_ticketCount;
++  int waiting_time;
++  int running_time;
++  int times_scheduled;
++  uint queue_ticks[2];
++ 
++
+ 
+   // wait_lock must be held when using this:
+   struct proc *parent;         // Parent process
+diff --git a/kernel/pstat.h b/kernel/pstat.h
+new file mode 100755
+index 0000000..6e06f76
+--- /dev/null
++++ b/kernel/pstat.h
+@@ -0,0 +1,16 @@
++ #ifndef _PSTAT_H_
++ #define _PSTAT_H_
++ #include "param.h"
++ struct pstat {
++    int pid[NPROC];
++    // the process ID of each process
++    int inuse[NPROC]; // whether this slot of the process table is being used (1 or 0)
++    int inQ[NPROC]; // which queue the process is currently in
++    int waiting_time[NPROC]; // the time each process has spent waiting before being scheduled
++    int running_time[NPROC]; // Number of times the process was scheduled before its time slice was used
++    int times_scheduled[NPROC]; // the total number of times this process was scheduled
++    int tickets_original[NPROC]; // the number of tickets each process originally had
++    int tickets_current[NPROC]; // the number of tickets each process currently has
++    uint queue_ticks[NPROC][2]; // the total number of ticks each process has spent in each queue
++ };
++#endif // _PSTAT_H_
+\ No newline at end of file
+diff --git a/kernel/ramdisk.c b/kernel/ramdisk.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/riscv.h b/kernel/riscv.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/sleeplock.c b/kernel/sleeplock.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/sleeplock.h b/kernel/sleeplock.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/spinlock.c b/kernel/spinlock.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/spinlock.h b/kernel/spinlock.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/start.c b/kernel/start.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/stat.h b/kernel/stat.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/string.c b/kernel/string.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/swtch.S b/kernel/swtch.S
+old mode 100644
+new mode 100755
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+old mode 100644
+new mode 100755
+index ed65409..ce52e87
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -101,6 +101,8 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_settickets(void);
++extern uint64 sys_getpinfo(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,6 +128,8 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_settickets] sys_settickets,
++[SYS_getpinfo] sys_getpinfo,
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+old mode 100644
+new mode 100755
+index bc5f356..7926b7f
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,5 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_settickets 22
++#define SYS_getpinfo 23
+diff --git a/kernel/sysfile.c b/kernel/sysfile.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+old mode 100644
+new mode 100755
+index 3b4d5bd..086ca38
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -5,6 +5,7 @@
+ #include "memlayout.h"
+ #include "spinlock.h"
+ #include "proc.h"
++#include "pstat.h"
+ 
+ uint64
+ sys_exit(void)
+@@ -91,3 +92,66 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++uint64
++sys_settickets(void)
++{
++  int ticket_number;
++  struct proc *p=myproc();
++  argint(0,&ticket_number);
++  //printf("Hello");
++  if(ticket_number<1){
++    acquire(&p->lock);
++    p->original_ticketCount=DEFAULT_TICKET;
++    p->current_ticketCount=DEFAULT_TICKET;
++    release(&p->lock);
++    return -1;
++  }
++  else{
++    acquire(&p->lock);
++    p->original_ticketCount=ticket_number;
++    p->current_ticketCount=ticket_number;
++    release(&p->lock);
++    return 0;
++  }
++}
++
++
++extern struct proc proc[NPROC];
++
++uint64
++sys_getpinfo(void)
++{
++  uint64 addr;
++  struct pstat pstat;
++  argaddr(0,&addr);
++  if(addr==0)
++  {
++    return -1;
++  }
++  else {
++    int index = 0;
++    struct proc *p;
++    for(p=proc;p<&proc[NPROC];p++) {
++      acquire(&p->lock);
++      pstat.pid[index]=p->pid;
++      pstat.inQ[index]=p->queue_level;
++      pstat.inuse[index]=p->state==RUNNING||p->state==RUNNABLE;
++      pstat.waiting_time[index]=p->waiting_time;
++      pstat.running_time[index]=p->running_time;
++      pstat.times_scheduled[index]=p->times_scheduled;
++      pstat.tickets_original[index]=p->original_ticketCount;
++      pstat.tickets_current[index] = p->current_ticketCount;
++      pstat.queue_ticks[index][0]=p->queue_ticks[0];
++      pstat.queue_ticks[index][1]=p->queue_ticks[1];
++      
++      index++;
++      release(&p->lock);
++    }
++    if(copyout(myproc()->pagetable, addr, (char *)&pstat, sizeof(pstat)) < 0) {
++      return -1;
++    }
++    return 0;
++  }
++}
++
+diff --git a/kernel/trampoline.S b/kernel/trampoline.S
+old mode 100644
+new mode 100755
+diff --git a/kernel/trap.c b/kernel/trap.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/types.h b/kernel/types.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/uart.c b/kernel/uart.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/virtio.h b/kernel/virtio.h
+old mode 100644
+new mode 100755
+diff --git a/kernel/virtio_disk.c b/kernel/virtio_disk.c
+old mode 100644
+new mode 100755
+diff --git a/kernel/vm.c b/kernel/vm.c
+old mode 100644
+new mode 100755
+diff --git a/mkfs/mkfs.c b/mkfs/mkfs.c
+old mode 100644
+new mode 100755
+diff --git a/user/cat.c b/user/cat.c
+old mode 100644
+new mode 100755
+diff --git a/user/dummyproc.c b/user/dummyproc.c
+new file mode 100755
+index 0000000..9b1a77f
+--- /dev/null
++++ b/user/dummyproc.c
+@@ -0,0 +1,59 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++void iterate(int iterations, int pid)
++{
++    if (pid == 0)
++    { 
++        //Child process
++        for (int i=1;;i++)
++        {
++            // if(i%100000000==0)
++            // {
++            //     sleep(2);
++            // }
++        }
++        exit(0);
++    }
++    else
++    {   
++        // Parent process
++        for (int i=0;i<iterations;i++)
++        {
++            
++        }
++        //wait(0); // Wait for the child process to complete
++    }
++}
++
++int main(int argc, char *argv[])
++{
++    if (argc != 3)
++    {
++        printf("Usage: dummyproc <tickets> <iterations>\n");
++        exit(1);
++    }
++
++    int tickets = atoi(argv[1]);
++    int iterations = atoi(argv[2]);
++
++    if (settickets(tickets) < 0)
++    {
++        printf("Error setting tickets\n");
++        exit(1);
++    }
++
++    int pid=fork();
++    if(pid<0)
++    {
++        printf("Error creating child process\n");
++        exit(1);
++    }
++    iterate(iterations, pid);
++    exit(0);
++}
++
++
++
++
+diff --git a/user/echo.c b/user/echo.c
+old mode 100644
+new mode 100755
+diff --git a/user/forktest.c b/user/forktest.c
+old mode 100644
+new mode 100755
+diff --git a/user/grep.c b/user/grep.c
+old mode 100644
+new mode 100755
+diff --git a/user/grind.c b/user/grind.c
+old mode 100644
+new mode 100755
+diff --git a/user/init.c b/user/init.c
+old mode 100644
+new mode 100755
+diff --git a/user/initcode.S b/user/initcode.S
+old mode 100644
+new mode 100755
+diff --git a/user/kill.c b/user/kill.c
+old mode 100644
+new mode 100755
+diff --git a/user/ln.c b/user/ln.c
+old mode 100644
+new mode 100755
+diff --git a/user/ls.c b/user/ls.c
+old mode 100644
+new mode 100755
+diff --git a/user/mkdir.c b/user/mkdir.c
+old mode 100644
+new mode 100755
+diff --git a/user/printf.c b/user/printf.c
+old mode 100644
+new mode 100755
+diff --git a/user/rm.c b/user/rm.c
+old mode 100644
+new mode 100755
+diff --git a/user/sh.c b/user/sh.c
+old mode 100644
+new mode 100755
+diff --git a/user/stressfs.c b/user/stressfs.c
+old mode 100644
+new mode 100755
+diff --git a/user/testprocinfo.c b/user/testprocinfo.c
+new file mode 100755
+index 0000000..86d0f22
+--- /dev/null
++++ b/user/testprocinfo.c
+@@ -0,0 +1,27 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++#include "kernel/pstat.h"
++#define COLOR_RESET   "\033[0m"
++#define COLOR_MAGENTA "\033[0;35m"
++#define COLOR_BROWN   "\033[0;33m"
++
++int main(int argc,char *argv[]) 
++{
++    struct pstat pstat;
++    if(getpinfo(&pstat)<0){
++        fprintf(2, "%s failed\n", argv[0]);
++        exit(1);
++    }
++    else 
++    {
++        //printf("PID\t|\tIn Use\t|\tIn Q\t|\tWaiting time\t|\tRunning time\t|\t # Times Scheduled\t|\tOriginal Tickets\t|\tCurrent Tickets\t|\tq0\t|\tq1\n");
++        printf(COLOR_MAGENTA "PID | In Use | In Q | Waiting time | Running time | # Times Scheduled | Original Tickets | Current Tickets |    q0    |    q1" COLOR_RESET "\n");
++        for(int i=0;i<NPROC;i++){
++            if(pstat.pid[i]==0)continue;
++            printf(COLOR_BROWN " %d\t%d\t%d\t   %d\t\t  %d\t\t    %d\t\t\t%d\t\t  %d\t      %d\t  %d" COLOR_RESET "\n",pstat.pid[i],pstat.inuse[i],pstat.inQ[i],pstat.waiting_time[i],pstat.running_time[i],pstat.times_scheduled[i],pstat.tickets_original[i], pstat.tickets_current[i],pstat.queue_ticks[i][0],pstat.queue_ticks[i][1]);
++        }
++
++        exit(0);
++    }
++}
+\ No newline at end of file
+diff --git a/user/ulib.c b/user/ulib.c
+old mode 100644
+new mode 100755
+diff --git a/user/umalloc.c b/user/umalloc.c
+old mode 100644
+new mode 100755
+diff --git a/user/user.h b/user/user.h
+old mode 100644
+new mode 100755
+index 04013ca..204626b
+--- a/user/user.h
++++ b/user/user.h
+@@ -1,4 +1,5 @@
+ struct stat;
++struct pstat;
+ 
+ // system calls
+ int fork(void);
+@@ -22,6 +23,8 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int settickets(int number);
++int getpinfo(struct pstat *);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/user.ld b/user/user.ld
+old mode 100644
+new mode 100755
+diff --git a/user/usertests.c b/user/usertests.c
+old mode 100644
+new mode 100755
+diff --git a/user/usys.pl b/user/usys.pl
+index 01e426e..21930eb 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -36,3 +36,5 @@ entry("getpid");
+ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
++entry("settickets");
++entry("getpinfo");
+\ No newline at end of file
+diff --git a/user/wc.c b/user/wc.c
+old mode 100644
+new mode 100755
+diff --git a/user/zombie.c b/user/zombie.c
+old mode 100644
+new mode 100755
